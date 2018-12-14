@@ -1,6 +1,6 @@
 import os
-import pickle
 import numpy as np
+from copy import deepcopy
 np.set_printoptions(threshold=np.inf)
 import pandas as pd
 import tensorflow as tf
@@ -93,7 +93,7 @@ def load_embedding_weights(tk):
     return vocab_size, embedding_weights
 
 
-def train_model(prop_name, tk, classes, train_data, test_data, train_classes, test_classes):
+def train_model(prop_name, tk, classes, class_weight, train_data, test_data, train_classes, test_classes):
     vocab_size, embedding_weights = load_embedding_weights(tk)
 
     # ================================ MODEL CONSTRUCTIONS
@@ -154,7 +154,7 @@ def train_model(prop_name, tk, classes, train_data, test_data, train_classes, te
 
     model.fit(train_data, to_categorical(train_classes),
               validation_data=(test_data, to_categorical(test_classes)),
-              batch_size=128, epochs=8, class_weight={0: 1., 1: 15.})
+              batch_size=128, epochs=8, class_weight=class_weight)
 
     # save to file
     # save the model to disk
@@ -166,12 +166,34 @@ def train_model(prop_name, tk, classes, train_data, test_data, train_classes, te
 def train_models(data, classes):
     models = []
     for prop_name in classes:
+        prop_data = deepcopy(data)
 
-        prop_data = rewrite_labels2other(data, prop_name)
-
-        print(prop_data.groupby([0]).count())
+        print("\nTRAINING MODEL FOR {}".format(prop_name))
+        prop_data = rewrite_labels2other(prop_data, prop_name)
 
         le, transformed_labels = encode_labels(prop_data)
+
+        labels_frequency = prop_data.groupby([0]).count()
+        print("\nlabels frequency: {}".format(labels_frequency))
+
+        # DEFINE CLASS WEIGHTS
+        labels_freq = []
+        for name, group in labels_frequency.iterrows():
+            labels_freq.append([name, group[1]])
+
+        class_weights = {}
+        if labels_freq[0][1] == labels_freq[1][1]:
+            class_weights[0] = 1
+            class_weights[1] = 1
+        elif labels_freq[0][1] > labels_freq[1][1]:  # verifies if frequency of first label is bigger than second
+            class_weights[le.transform([labels_freq[0][0]])[0]] = 1  # if higher frequency, minor weight
+            # if minor frequency, bigger weight (minor label frequency divided by bigger label freq)
+            class_weights[le.transform([labels_freq[1][0]])[0]] = round(labels_freq[0][1] / float(labels_freq[1][1]), 2)
+        else:  # otherwise
+            class_weights[le.transform([labels_freq[0][0]])[0]] = round(labels_freq[1][1] / float(labels_freq[0][1]), 2)
+            class_weights[le.transform([labels_freq[1][0]])[0]] = 1
+
+        print("\nclass_weights: {}".format(class_weights))
 
         X_train, X_test, y_train, y_test = split_data(prop_data, transformed_labels)
 
@@ -185,10 +207,12 @@ def train_models(data, classes):
         filename = 'models/cnn_model-' + prop_name + '.h5'
         exists = os.path.isfile(filename)
         if exists:
+            print("\nLOADING ALREADY EXISTING MODEL")
             model = load_model(filename)
             models.append([prop_name, le, tk, model])
         else:
-            model = train_model(prop_name, tk, prop_data[0].unique(), train_data, test_data, y_train, y_test)
+            print("\nSTART TRAINING MODEL")
+            model = train_model(prop_name, tk, prop_data[0].unique(), class_weights, train_data, test_data, y_train, y_test)
             models.append([prop_name, le, tk, model])
     return models
 
