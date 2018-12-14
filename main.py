@@ -26,7 +26,9 @@ def load_data():
 
     df_data = df_data.reset_index()
 
-    print(df_data.sample(5))
+    print("TRAINING LABELS FREQUENCY")
+    print(df_data.groupby([0]).count())
+    # print(df_data.sample(5))
 
     classes = df_data[0].unique()
 
@@ -34,16 +36,17 @@ def load_data():
 def load_validation_data():
     data_source = './data/validation-sentences.csv'
     validation_data = pd.read_csv(data_source)
-    validation_data = validation_data[['property', 'sentence']]
+    validation_data = validation_data[['property', 'value', 'sentence']]
     validation_data['property'] = le.transform(validation_data['property'].values)
-    print(validation_data.sample(5))
+    # print(validation_data.sample(5))
     return validation_data
+
 
 def encode_labels():
     global transformed_labels, le
     le = LabelEncoder()
     le.fit(classes)
-    print("{} labels: {}".format(len(le.classes_), le.classes_))
+    print("\n{} labels: {}".format(len(le.classes_), list(le.classes_)))
     print("transform: {}".format(le.transform(le.classes_)))
     transformed_labels = le.transform(df_data[0].values)
 
@@ -84,7 +87,6 @@ def load_embedding_weights():
         embedding_weights.append(onehot)
     embedding_weights = np.array(embedding_weights)
     print("Embedding shape: {}".format(embedding_weights.shape))
-    # x print(embedding_weights[1:6])
 
 
 def train_model():
@@ -138,8 +140,7 @@ def train_model():
     model.summary()
 
     model.fit(train_data, to_categorical(train_classes),
-              validation_data=(test_data,
-                               to_categorical(test_classes)),
+              test_data=(test_data, to_categorical(test_classes)),
               batch_size=128, epochs=3, verbose=2)
 
     # save to file
@@ -186,45 +187,89 @@ else:
 
 # predict samples
 validation_data = load_validation_data()
-for index, data in validation_data.iterrows():
-    sentence = data[['sentence']].values[0]
-    sentence_tokens = word_tokenize(sentence)
 
-    pred = []
+# print("PREDICTIONS ON SENTENCE WINDOWS: {}".format(validation_data.shape))
+
+predictions = []
+for index, data in validation_data.iterrows():
+    sentence = data[['sentence']].values[0].lower()
+    sentence_tokens = word_tokenize(sentence.decode('utf-8'))
+
+    texts = sentence_tokens
+    '''texts = []
     for window in sliding_window(sentence_tokens, window_size=2):
         w = ''
         for i in window:
             w += i + " "
-        pred.append(w.strip())
+        texts.append(w.strip())'''
 
-    print(pred)
-
-    window_sequences = tk.texts_to_sequences(pred)
-    pred_data = pad_sequences(window_sequences, maxlen=1014, padding='post')
+    texts_sequences = tk.texts_to_sequences(texts)
+    pred_data = pad_sequences(texts_sequences, maxlen=1014, padding='post')
     pred_data = np.array(pred_data, dtype='float32')
 
     y_pred = model.predict(pred_data)
 
-    print(data[['property']].values[0])
-
     proba = np.amax(y_pred, axis=1)
     indexes = y_pred.argmax(axis=1)
-    print(indexes)
-    print(proba)
-    print(" ")
-    if index == 2:
-        break
 
-'''x_pred = ["new york", "2,55", "152,250", "shoshana county", "1500", "1.8%", "8th", "ohio", "frankfurt"]
-pred_sequences = tk.texts_to_sequences(x_pred)
-pred_data = pad_sequences(pred_sequences, maxlen=1014, padding='post')
-pred_data = np.array(pred_data, dtype='float32')
+    bigger_proba = np.argmax(proba)
+    class_predicted = indexes[bigger_proba]
+    selected_text = texts[bigger_proba]
 
-y_pred = model.predict(pred_data)
+    predictions.append({'truth': data[['property']].values[0], 'pred': class_predicted,
+                        'truth_text': data[['value']].values[0], 'pred_text': selected_text})
 
-print(x_pred)
+    if index < 3:  # data[['property']].values[0] == class_predicted or index < 5:
+        print("\n\t==================================================================")
+        print("\tSENT TOKENS/WINDOW: {}".format(texts))
+        print("\tINDIVIDUAL TOKEN PRED: {}".format(list(indexes)))
+        print("\tPROBABILITIES: {}".format(list(proba)))
 
-indexes = y_pred.argmax(axis=1)
+        print("\tSENTENCE TRUTH: {} - {}".format(data[['property']].values[0], le.inverse_transform(np.array([data[['property']].values[0]]))))
+        print("\tFINAL AND HIGHER PREDICTION IN SENTENCE: {} - {}\n".format(class_predicted, le.inverse_transform(np.array([class_predicted]))))
 
-print(classes[indexes])
-'''
+        print("\tTRUTH EXTRACTION: {}".format(data[['value']].values[0]))
+        print("\tPRED EXTRACTION: {}".format(selected_text))
+        print("\t==================================================================")
+
+print(" ")
+
+count_by_prop = {}
+for i in range(len(predictions)):
+
+    if predictions[i]['truth'] == predictions[i]['pred']:
+
+        property_name = le.inverse_transform(np.array([predictions[i]['truth']]))[0]
+
+        if str(property_name) in count_by_prop.keys():
+            count_by_prop[str(property_name)] += 1
+        else:
+            count_by_prop[str(property_name)] = 1
+
+        print("{} = t: {}-{} | p: {}-{}".format(property_name,  predictions[i]['truth'], predictions[i]['truth_text'], predictions[i]['pred'], predictions[i]['pred_text']))
+
+props = validation_data.groupby(['property'], as_index=False).count()['property'].values
+props_count = validation_data.groupby(['property'], as_index=False).count()['sentence'].values
+
+dict_validation_count = {}
+for i in range(len(props)):
+    dict_validation_count[le.inverse_transform(np.array([props[i]]))[0]] = props_count[i]
+
+# print(dict_validation_count)
+# print(count_by_prop)
+
+final = {}
+for k, v in dict_validation_count.iteritems():
+    if k in count_by_prop:
+        final[k] = float(count_by_prop[k]) / float(v)
+    else:
+        final[k] = 0
+
+print("\nPRECISION BY CLASS:")
+print(final)
+
+count_total = 0
+for k, v in count_by_prop.iteritems():
+    count_total += v
+
+print("\nTotal Precision: {}/{} = {}".format(count_total, validation_data.shape[0], count_total / float(validation_data.shape[0])))
