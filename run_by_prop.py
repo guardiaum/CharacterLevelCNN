@@ -20,7 +20,7 @@ def load_validation_data(le, class_):
     data_source = './data/validation-sentences.csv'
     validation_data = pd.read_csv(data_source)
     validation_data = validation_data[['property', 'value', 'sentence']]
-    validation_data.loc[validation_data['property'] != class_, 'property'] = 'OTHER'
+    validation_data.loc[validation_data['property'] != class_, 'property'] = 'other'
     validation_data['property'] = le.transform(validation_data['property'].values)
     # print(validation_data.sample(5))
     return validation_data
@@ -42,7 +42,7 @@ def load_data():
 
 
 def rewrite_labels2other(data, class_):
-    data.loc[data[0] != class_, 0] = 'OTHER'
+    data.loc[data[0] != class_, 0] = 'other'
     return data
 
 
@@ -154,7 +154,7 @@ def train_model(prop_name, tk, classes, train_data, test_data, train_classes, te
 
     model.fit(train_data, to_categorical(train_classes),
               validation_data=(test_data, to_categorical(test_classes)),
-              batch_size=128, epochs=2, class_weight={0: 1., 1: 15.})
+              batch_size=128, epochs=8, class_weight={0: 1., 1: 15.})
 
     # save to file
     # save the model to disk
@@ -293,7 +293,7 @@ def extraction_pipeline(class_, data, tk, le, model):
 
 data, classes = load_data()
 
-models = train_models(data, ['state'])
+models = train_models(data, classes)
 
 # predict samples
 for m in models:
