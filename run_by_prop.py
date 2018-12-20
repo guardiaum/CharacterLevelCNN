@@ -7,6 +7,7 @@ import pandas as pd
 import tensorflow as tf
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.utils import resample
 from keras.utils import to_categorical
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
@@ -97,6 +98,39 @@ def remove_outliers(df_data):
 def rewrite_labels2other(data, class_):
     data.loc[data[0] != class_, 0] = 'other'
     return data
+
+
+def downsampling(df):
+    df_class_f = df[df[0] == 'other']
+    df_class_t = df[df[0] != 'other']
+
+    majority = None
+    minority = None
+    if df_class_t.shape[0] > df_class_f.shape[0]:  # downsample class t
+        majority = df_class_t
+        minority = df_class_f
+    elif df_class_f.shape[0] > df_class_t.shape[0]:  # downsample class f
+        majority = df_class_f
+        minority = df_class_t
+    elif df_class_f.shape[0] == df_class_t.shape[0]:
+        return df
+
+    # Downsample majority class
+    if majority is not None and minority is not None:
+        print("Majority samples size: %s" % majority.shape[0])
+        print("Minority samples size: %s" % minority.shape[0])
+
+        majority_downsampled = resample(majority,
+                                        replace=False,
+                                        n_samples=minority.shape[0],
+                                        random_state=42)
+
+        print("After downsampling: %s" % majority_downsampled.shape[0])
+
+        df_downsampled = pd.concat([majority_downsampled, minority])
+        return df_downsampled
+
+    return df
 
 
 def encode_labels(data):
@@ -290,7 +324,7 @@ def extraction_pipeline(class_, data, tk, le, model, df_max_tokens):
     for index, d in data.iterrows():
         sentence = d[['sentence']].values[0].lower()
         property_name = d[['property']].values[0]
-        print('{}: {}'.format(property_name, sentence))
+        #print('{}: {}'.format(property_name, sentence))
         sentence_tokens = word_tokenize(sentence.decode('utf-8'))
 
         # define window size based on max tokens per property
