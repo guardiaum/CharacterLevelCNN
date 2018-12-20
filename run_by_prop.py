@@ -260,6 +260,8 @@ def train_models(data, classes):
         # transform all remaining classes to 'other' label
         prop_data = rewrite_labels2other(prop_data, prop_name)
 
+        prop_data = downsampling(prop_data)
+
         le, transformed_labels = encode_labels(prop_data)
 
         labels_frequency = prop_data.groupby([0]).count()
