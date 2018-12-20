@@ -1,4 +1,5 @@
 import os
+import math
 import numpy as np
 from copy import deepcopy
 np.set_printoptions(threshold=np.inf)
@@ -28,17 +29,69 @@ def load_validation_data(le, class_):
 
 def load_data():
     data_source = './data/us_county.csv'
-    df_data = pd.read_csv(data_source, header=None)
+    df_data = pd.read_csv(data_source, header=None, encoding="utf-8")
 
     df_data = df_data.set_index(0)
     df_data = df_data.drop(["time_zone", "web", "ex_image", "ex_image_cap", "seal"], axis=0)
 
     df_data = df_data.reset_index()
-
-    print("TRAINING DATA FREQUENCY")
+    print("\nDESCRIBE")
+    print(df_data.describe())
+    print("\nTRAINING DATA FREQUENCY")
     print(df_data.groupby([0]).count())
+    print("\n")
 
-    return df_data, df_data[0].unique()
+    df_tokens = remove_outliers(df_data)
+
+    print("\nDESCRIBE")
+    print(df_tokens.describe())
+    print("\nTRAINING DATA FREQUENCY")
+    print(df_tokens.groupby([0]).count())
+    print("\n")
+    df_max = df_tokens.groupby([0])[2].max().reset_index()
+    print("\n[NEW] max tokens count")
+    print(df_max)
+    #print("\nMean count of tokens")
+    #print(df_tokens.groupby([0])[2].mean().round(0).astype(int))
+
+    return df_data, df_data[0].unique(), df_max  # returns data and classes
+
+
+def remove_outliers(df_data):
+    count_tokens = []
+    for i, d in df_data.iterrows():
+        d2 = len(word_tokenize(d[1]))
+        count_tokens.append([d[0], d[1], d2])  # [property, value, tokens count]
+
+    df_tokens = pd.DataFrame(count_tokens)
+
+    df_max = df_tokens.groupby([0])[2].max().reset_index()
+    print("\nMax tokens count")
+    print(df_max)
+
+    df_mean = df_tokens.groupby([0])[2].mean().reset_index()
+    print("\nMean tokens count")
+    print(df_mean)
+
+    df_std = df_tokens.groupby([0])[2].std().reset_index()
+    print("\nStd tokens count")
+    print(df_std)
+
+    properties_name = np.array(df_std[0].values)
+    bound = np.array(df_mean[2].values) + np.array(df_std[2].values)
+    df_bounds = pd.DataFrame(data=list(zip(properties_name.T, bound.T)), columns=['props', 'bound'])
+
+    print("\nBounds")
+    print(df_bounds)
+    for i, d in df_tokens.iterrows():
+        prop = d[0]
+        tuple = df_bounds[df_bounds['props'] == prop]
+        prop_bound = math.ceil(tuple.iloc[0, 1])
+        if d[2] > prop_bound:
+            # print("prop name: {}\nsent tokens: {}\nprop bound: {}".format(prop, d[2], prop_bound))
+            df_tokens.drop([i], inplace=True)
+
+    return df_tokens
 
 
 def rewrite_labels2other(data, class_):
@@ -169,6 +222,8 @@ def train_models(data, classes):
         prop_data = deepcopy(data)
 
         print("\nTRAINING MODEL FOR {}".format(prop_name))
+
+        # transform all remaining classes to 'other' label
         prop_data = rewrite_labels2other(prop_data, prop_name)
 
         le, transformed_labels = encode_labels(prop_data)
@@ -177,21 +232,7 @@ def train_models(data, classes):
         print("\nlabels frequency: {}".format(labels_frequency))
 
         # DEFINE CLASS WEIGHTS
-        labels_freq = []
-        for name, group in labels_frequency.iterrows():
-            labels_freq.append([name, group[1]])
-
-        class_weights = {}
-        if labels_freq[0][1] == labels_freq[1][1]:
-            class_weights[0] = 1
-            class_weights[1] = 1
-        elif labels_freq[0][1] > labels_freq[1][1]:  # verifies if frequency of first label is bigger than second
-            class_weights[le.transform([labels_freq[0][0]])[0]] = 1  # if higher frequency, minor weight
-            # if minor frequency, bigger weight (minor label frequency divided by bigger label freq)
-            class_weights[le.transform([labels_freq[1][0]])[0]] = round(labels_freq[0][1] / float(labels_freq[1][1]), 2)
-        else:  # otherwise
-            class_weights[le.transform([labels_freq[0][0]])[0]] = round(labels_freq[1][1] / float(labels_freq[0][1]), 2)
-            class_weights[le.transform([labels_freq[1][0]])[0]] = 1
+        class_weights = define_class_weights(labels_frequency, le)
 
         print("\nclass_weights: {}".format(class_weights))
 
@@ -217,21 +258,52 @@ def train_models(data, classes):
     return models
 
 
+def define_class_weights(labels_frequency, le):
+    class_weights = {}
+    labels_freq = []
+    for name, group in labels_frequency.iterrows():
+        labels_freq.append([name, group[1]])
+    if labels_freq[0][1] == labels_freq[1][1]:  # if frequency for both labels is equal
+        class_weights[0] = 1
+        class_weights[1] = 1
+    elif labels_freq[0][1] > labels_freq[1][1]:  # verifies if frequency of first label is bigger than second
+        class_weights[le.transform([labels_freq[0][0]])[0]] = 1  # if higher frequency, minor weight
+        # if minor frequency, bigger weight (minor label frequency divided by bigger label freq)
+        class_weights[le.transform([labels_freq[1][0]])[0]] = round(labels_freq[0][1] / float(labels_freq[1][1]), 2)
+    else:  # otherwise
+        class_weights[le.transform([labels_freq[0][0]])[0]] = round(labels_freq[1][1] / float(labels_freq[0][1]), 2)
+        class_weights[le.transform([labels_freq[1][0]])[0]] = 1
+    return class_weights
+
+
 def sliding_window(sent_tokens, window_size):
-    for i in range(len(sent_tokens) - window_size + 1):
-        yield sent_tokens[i: i + window_size]
+    if len(sent_tokens) >= window_size:
+        for i in range(len(sent_tokens) - window_size + 1):
+            yield sent_tokens[i: i + window_size]
+    else:
+        yield sent_tokens
 
 
-def extraction_pipeline(class_, data, tk, le, model):
+def extraction_pipeline(class_, data, tk, le, model, df_max_tokens):
 
     predictions = []
     for index, d in data.iterrows():
         sentence = d[['sentence']].values[0].lower()
+        property_name = d[['property']].values[0]
+        print('{}: {}'.format(property_name, sentence))
         sentence_tokens = word_tokenize(sentence.decode('utf-8'))
+
+        # define window size based on max tokens per property
+        window_size = 1
+        #if property_name in df_max_tokens[0]:
+        all_props = df_max_tokens[0].values
+        if property_name in all_props:
+            max_len = df_max_tokens.loc[df_max_tokens[0] == property_name, 2]
+            window_size = max_len
 
         #texts = sentence_tokens
         texts = []
-        for window in sliding_window(sentence_tokens, window_size=2):
+        for window in sliding_window(sentence_tokens, window_size=window_size):
             w = ''
             for i in window:
                 w += i + " "
@@ -315,7 +387,7 @@ def extraction_pipeline(class_, data, tk, le, model):
                                                  count_total / float(data.shape[0])))
 
 
-data, classes = load_data()
+data, classes, df_max_tokens = load_data()
 
 models = train_models(data, classes)
 
@@ -323,4 +395,4 @@ models = train_models(data, classes)
 for m in models:
     prop_name, le, tk, model = m
     val_data = load_validation_data(le, prop_name)
-    extraction_pipeline(prop_name, val_data, tk, le, model)
+    extraction_pipeline(prop_name, val_data, tk, le, model, df_max_tokens)
